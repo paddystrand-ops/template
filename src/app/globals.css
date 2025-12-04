@@ -143,3 +143,31 @@ select:focus {
     max-width: 300px;
   }
 }
+
+/* Make all form input text and placeholders clearly visible */
+input,
+textarea,
+select {
+  color: #0f172a; /* dark slate text */
+}
+
+/* Normal placeholder colour (e.g. "john.doe@example.com") */
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280; /* slate-500 */
+  opacity: 1;     /* ensure it's not too faint */
+}
+
+/* For browsers using vendor-prefixed placeholders */
+input::-webkit-input-placeholder,
+textarea::-webkit-input-placeholder {
+  color: #6b7280;
+  opacity: 1;
+}
+
+input:-ms-input-placeholder,
+textarea:-ms-input-placeholder {
+  color: #6b7280;
+  opacity: 1;
+}
+

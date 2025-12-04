@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, ChangeEvent } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   Globe2,
@@ -11,6 +12,7 @@ import {
   FileDown,
   PlayCircle,
   Brain,
+  LogOut,
 } from "lucide-react";
 
 import Papa from "papaparse";
@@ -31,26 +33,19 @@ const YEAR_COLUMNS = Array.from(
   (_, i) => (2000 + i).toString()
 );
 
-// Focus on 3 key indicators from the dataset
-const INDICATOR_OPTIONS = [
-  "Birth rate, crude (per 1,000 people)",
-  "Death rate, crude (per 1,000 people)",
-  "Life expectancy at birth, total (years)",
-];
-
-const DEFAULT_INDICATOR = INDICATOR_OPTIONS[0]; // birth rate
-const DEFAULT_COUNTRY = "Ireland";
-
 type RawRow = Record<string, string>;
 
 export default function DashboardPage() {
+  const router = useRouter();
+
+  const [username, setUsername] = useState<string | null>(null);
+
   const [generated, setGenerated] = useState(false);
-  const [selectedIndicator, setSelectedIndicator] =
-    useState<string>(DEFAULT_INDICATOR);
-  const [selectedCountry, setSelectedCountry] =
-    useState<string>(DEFAULT_COUNTRY);
+  const [selectedIndicator, setSelectedIndicator] = useState<string>("");
+  const [selectedCountry, setSelectedCountry] = useState<string>("Ireland");
 
   const [rawData, setRawData] = useState<RawRow[] | null>(null);
+  const [indicatorOptions, setIndicatorOptions] = useState<string[]>([]);
   const [loadingData, setLoadingData] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -65,6 +60,20 @@ export default function DashboardPage() {
     { label: "Life expectancy", icon: TrendingUp },
     { label: "Population health", icon: Users },
   ];
+
+  // Load username from localStorage (set by landing page)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("whd-username");
+    if (stored) setUsername(stored);
+  }, []);
+
+  const handleSignOut = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("whd-username");
+    }
+    router.push("/");
+  };
 
   // Load the cleaned CSV once on mount
   useEffect(() => {
@@ -90,6 +99,18 @@ export default function DashboardPage() {
         );
 
         setRawData(rows);
+
+        // Build full indicator list from the CSV (this replaces unique_series_names.csv)
+        const indicators = Array.from(
+          new Set(rows.map((row) => row["Series Name"]))
+        ).sort();
+
+        setIndicatorOptions(indicators);
+
+        // Set a default indicator if we don't have one yet
+        if (!selectedIndicator && indicators.length > 0) {
+          setSelectedIndicator(indicators[0]);
+        }
       } catch (err) {
         setLoadError(
           "Could not load health dataset. Check that public/data/Data_Cleaned.csv exists and try again."
@@ -100,6 +121,8 @@ export default function DashboardPage() {
     };
 
     loadData();
+    // we intentionally ignore selectedIndicator in deps so it only runs once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleGenerate = () => {
@@ -109,22 +132,25 @@ export default function DashboardPage() {
   const handleIndicatorChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const newIndicator = e.target.value;
     setSelectedIndicator(newIndicator);
+    setGenerated(false); // force user to regenerate to reflect change
   };
 
   const handleCountryChange = (e: ChangeEvent<HTMLSelectElement>) => {
     setSelectedCountry(e.target.value);
+    setGenerated(false);
   };
 
   // Build list of countries for the selected indicator from the real data
-  const countriesForSelectedIndicator: string[] = rawData
-    ? Array.from(
-        new Set(
-          rawData
-            .filter((row) => row["Series Name"] === selectedIndicator)
-            .map((row) => row["Country Name"])
-        )
-      ).sort()
-    : [];
+  const countriesForSelectedIndicator: string[] =
+    rawData && selectedIndicator
+      ? Array.from(
+          new Set(
+            rawData
+              .filter((row) => row["Series Name"] === selectedIndicator)
+              .map((row) => row["Country Name"])
+          )
+        ).sort()
+      : [];
 
   // If there are no matches yet (e.g. still loading), keep at least the current value
   const effectiveCountryOptions =
@@ -134,7 +160,7 @@ export default function DashboardPage() {
 
   // Find the row matching the selected indicator + country
   const matchingRow: RawRow | undefined =
-    generated && rawData
+    generated && rawData && selectedIndicator && selectedCountry
       ? rawData.find(
           (row) =>
             row["Series Name"] === selectedIndicator &&
@@ -156,7 +182,9 @@ export default function DashboardPage() {
       : [];
 
   const generateReportNotes = () => {
-    const header = `Report notes for ${selectedIndicator} in ${selectedCountry} (2000–2023)\n\n`;
+    const header = `Report notes for ${selectedIndicator || "the selected indicator"} in ${
+      selectedCountry
+    } (2000–2023)\n\n`;
     const body =
       generated && chartData.length > 0
         ? [
@@ -165,7 +193,7 @@ export default function DashboardPage() {
             `2. Comment on any obvious spikes or drops in the line.`,
             `   • Could these be linked to policy changes, economic events, or health crises?`,
             `3. Compare ${selectedCountry} to other countries or regions if you explore them on the dashboard.`,
-            `4. Explain what this means for births, deaths, or life expectancy in practical terms.`,
+            `4. Explain what this means in practical terms (e.g. births, deaths, life expectancy or the meaning of this indicator).`,
             `5. Briefly summarise why these findings are important for public health planning.`,
           ].join("\n")
         : [
@@ -235,10 +263,10 @@ export default function DashboardPage() {
       "• Comment on whether this pattern is expected for this country/region.",
       "• Suggest possible reasons (policy changes, economic conditions, health system strength, crises).",
       "• Compare this pattern to other countries for the same indicator if data is available.",
-      "• Link the numeric change back to real-world effects on births, deaths, or life expectancy.",
+      "• Link the numeric change back to real-world effects relevant to this indicator.",
     ];
 
-  setAiInsight(lines.join("\n"));
+    setAiInsight(lines.join("\n"));
   };
 
   return (
@@ -250,7 +278,28 @@ export default function DashboardPage() {
       </header>
 
       <main className="flex-1 w-full">
-        {/* Top summary + Generate button + PDF download */}
+        {/* Signed-in bar */}
+        <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between px-4 pt-4 pb-2 text-xs sm:text-sm text-gray-700">
+          <div>
+            {username ? (
+              <span>
+                Signed in as <strong>{username}</strong>
+              </span>
+            ) : (
+              <span>Not signed in (demo mode)</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="mt-2 sm:mt-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-gray-300 text-xs font-medium hover:bg-gray-100 transition"
+          >
+            <LogOut className="h-3 w-3" />
+            Sign out
+          </button>
+        </div>
+
+        {/* Top controls */}
         <section id="controls">
           <div className="controls-row">
             {/* Left: overview text */}
@@ -258,14 +307,14 @@ export default function DashboardPage() {
               <label>Overview</label>
               <p className="text-sm text-gray-700">
                 Explore{" "}
-                <strong>births, deaths, mortality, life expectancy</strong> and
-                other key world health indicators across more than 200
-                countries. The graphs below now use values from your cleaned data
-                file <strong>Data_Cleaned.csv</strong>.
+                <strong>births, deaths, life expectancy</strong> and many other
+                world health indicators across more than 200 countries. The
+                graphs use values from your cleaned data file{" "}
+                <strong>Data_Cleaned.csv</strong>.
               </p>
               <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
                 <Globe2 className="h-4 w-4 text-blue-600" />
-                108 indicators • 200+ countries • Years: 2000–2023
+                108+ indicators • 200+ countries • Years: 2000–2023
               </p>
               {loadingData && (
                 <p className="text-xs text-gray-500 mt-1">
@@ -278,21 +327,22 @@ export default function DashboardPage() {
             </div>
 
             {/* Middle-left: indicator selection */}
-            <div className="control-group" style={{ maxWidth: "240px" }}>
+            <div className="control-group" style={{ maxWidth: "260px" }}>
               <label>Health indicator</label>
               <select
                 value={selectedIndicator}
                 onChange={handleIndicatorChange}
-                disabled={loadingData || !!loadError}
+                disabled={loadingData || !!loadError || indicatorOptions.length === 0}
               >
-                {INDICATOR_OPTIONS.map((indicator) => (
+                {indicatorOptions.map((indicator) => (
                   <option key={indicator} value={indicator}>
                     {indicator}
                   </option>
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                Currently focused on births, deaths, and total life expectancy.
+                List built directly from the CSV (no need to maintain a separate
+                unique_series_names file in code).
               </p>
             </div>
 
@@ -311,7 +361,7 @@ export default function DashboardPage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                Dataset contains over 200 countries. Default is Ireland.
+                Options filtered by the selected indicator.
               </p>
             </div>
 
@@ -322,7 +372,13 @@ export default function DashboardPage() {
                 type="button"
                 onClick={handleGenerate}
                 className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition disabled:opacity-60 disabled:cursor-not-allowed mb-2"
-                disabled={generated || loadingData || !!loadError}
+                disabled={
+                  generated ||
+                  loadingData ||
+                  !!loadError ||
+                  !selectedIndicator ||
+                  !selectedCountry
+                }
               >
                 <PlayCircle className="h-4 w-4 mr-2" />
                 {generated ? "Graphs generated" : "Generate graphs & data"}
@@ -336,7 +392,7 @@ export default function DashboardPage() {
                 Download PDF summary
               </a>
               <p className="text-xs text-gray-500 mt-2">
-                1) Generate graphs & data. 2) Use them as evidence in your
+                1) Generate graphs &amp; data. 2) Use them as evidence in your
                 report. 3) Download the PDF template if needed.
               </p>
             </div>
@@ -374,7 +430,7 @@ export default function DashboardPage() {
         {/* Main chart area */}
         <section id="chartContainer">
           <h2 className="text-xl font-semibold mb-1">
-            {selectedIndicator}{" "}
+            {selectedIndicator || "Select an indicator"}{" "}
             {generated ? "(generated from cleaned data)" : "(waiting for generation)"}
           </h2>
           <p className="text-sm text-gray-600 mb-4">
@@ -427,9 +483,9 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Summary / explanation area using #summary + .data-info + report notes + AI insight */}
+        {/* Summary / explanation area */}
         <section id="summary">
-          <h2>Summary & Interpretation</h2>
+          <h2>Summary &amp; Interpretation</h2>
           {generated && chartData.length > 0 ? (
             <>
               <p className="text-sm text-gray-700">
@@ -450,8 +506,8 @@ export default function DashboardPage() {
                   change the selection?
                 </li>
                 <li>
-                  What story about births, deaths, or life expectancy does this
-                  graph tell that you can write up in your report?
+                  What story does this graph tell that you can write up in your
+                  report?
                 </li>
               </ul>
             </>
@@ -459,8 +515,8 @@ export default function DashboardPage() {
             <>
               <p className="text-sm text-gray-700">
                 Once you&apos;ve generated the graphs, this section should be
-                used to write up your findings. Focus on what is happening with
-                births, deaths, life expectancy, and other indicators over time.
+                used to write up your findings. Focus on what is happening over
+                time and what that might mean for health outcomes.
               </p>
               <p className="text-sm text-gray-700 mt-2">
                 Start by generating the data above, then use the chart and key
@@ -504,8 +560,8 @@ export default function DashboardPage() {
             />
 
             <p className="text-[11px] text-gray-500">
-              These notes are meant to be a starting template. Edit them in place,
-              then copy into your Word/PDF report or learning journal.
+              These notes are meant to be a starting template. Edit them in
+              place, then copy into your Word/PDF report or learning journal.
             </p>
           </div>
 
@@ -534,14 +590,14 @@ export default function DashboardPage() {
             />
 
             <p className="text-[11px] text-gray-500">
-              This summary is generated locally using simple logic, not a real LLM.
-              Later you could replace this with a proper AI service to generate
-              richer explanations and predictions.
+              This summary is generated locally using simple logic, not a real
+              LLM. Later you could replace this with a proper AI service to
+              generate richer explanations and predictions.
             </p>
           </div>
 
           <div className="data-info">
-            <p>📊 108 Indicators • 200+ Countries • Years: 2000–2023</p>
+            <p>📊 108+ Indicators • 200+ Countries • Years: 2000–2023</p>
           </div>
         </section>
       </main>
