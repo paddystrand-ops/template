@@ -10,6 +10,7 @@ import {
   AlertCircle,
   FileDown,
   PlayCircle,
+  Brain,
 } from "lucide-react";
 
 import {
@@ -98,6 +99,8 @@ export default function DashboardPage() {
   const [reportNotes, setReportNotes] = useState("");
   const [copied, setCopied] = useState(false);
 
+  const [aiInsight, setAiInsight] = useState("");
+
   const stats = [
     { label: "Birth-related indicators", icon: Activity },
     { label: "Death & mortality rates", icon: AlertCircle },
@@ -167,6 +170,57 @@ export default function DashboardPage() {
     generated && demoData[selectedIndicator]?.[selectedCountry]
       ? demoData[selectedIndicator][selectedCountry]
       : [];
+
+  const generateAiInsight = () => {
+    if (!generated || chartData.length === 0) {
+      setAiInsight(
+        [
+          "Please generate graphs & data first.",
+          "",
+          '1. Click "Generate graphs & data" above.',
+          "2. Make sure a health indicator and country/region are selected.",
+          "3. Then try generating the AI-style summary again.",
+        ].join("\n")
+      );
+      return;
+    }
+
+    const first = chartData[0].value;
+    const last = chartData[chartData.length - 1].value;
+    const diff = last - first;
+
+    let trend: string;
+    if (diff > 0.5) trend = "increasing";
+    else if (diff < -0.5) trend = "decreasing";
+    else trend = "relatively stable";
+
+    const indicatorShort = selectedIndicator.toLowerCase();
+
+    const lines = [
+      "AI-style summary (prototype, no external model):",
+      "",
+      `For ${selectedIndicator} in ${selectedCountry}, the indicator appears to be ${trend} over the years shown.`,
+      `The value starts around ${first.toFixed(
+        1
+      )} and ends near ${last.toFixed(
+        1
+      )}, suggesting that ${indicatorShort} has ${
+        trend === "increasing"
+          ? "been rising overall during this period."
+          : trend === "decreasing"
+          ? "declined over time."
+          : "remained fairly steady."
+      }`,
+      "",
+      "In your report, you could:",
+      "• Comment on whether this pattern is expected for this country/region.",
+      "• Suggest possible reasons (policy changes, economic conditions, health system strength, crises).",
+      "• Compare this pattern to the global trend for the same indicator if data is available.",
+      "• Link the numeric change back to real-world effects on births, deaths, or life expectancy.",
+    ];
+
+    setAiInsight(lines.join("\n"));
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
@@ -337,7 +391,7 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Summary / explanation area using #summary + .data-info + report notes */}
+        {/* Summary / explanation area using #summary + .data-info + report notes + AI insight */}
         <section id="summary">
           <h2>Summary & Interpretation</h2>
           {generated ? (
@@ -416,6 +470,37 @@ export default function DashboardPage() {
             <p className="text-[11px] text-gray-500">
               These notes are meant to be a starting template. Edit them in place,
               then copy into your Word/PDF report or learning journal.
+            </p>
+          </div>
+
+          {/* AI-style insight block */}
+          <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Brain className="h-4 w-4 text-purple-600" />
+                AI-style insight (prototype)
+              </h3>
+              <button
+                type="button"
+                onClick={generateAiInsight}
+                className="px-3 py-1.5 rounded-md bg-purple-600 text-white text-xs font-medium hover:bg-purple-700 transition"
+              >
+                Generate AI summary
+              </button>
+            </div>
+
+            <textarea
+              value={aiInsight}
+              readOnly
+              rows={7}
+              className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-gray-100/70 focus:outline-none resize-vertical"
+              placeholder="Click 'Generate AI summary' to create a prototype narrative based on the selected indicator and country..."
+            />
+
+            <p className="text-[11px] text-gray-500">
+              This summary is generated locally using simple logic, not a real LLM.
+              Later you could replace this with a proper AI service to generate
+              richer explanations and predictions.
             </p>
           </div>
 
