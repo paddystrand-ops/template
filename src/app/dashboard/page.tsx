@@ -13,6 +13,8 @@ import {
   PlayCircle,
   Brain,
   LogOut,
+  Copy,
+  Check,
 } from "lucide-react";
 
 import Papa from "papaparse";
@@ -35,6 +37,14 @@ const YEAR_COLUMNS = Array.from(
 
 type RawRow = Record<string, string>;
 
+type ChartRow = {
+  year: string;
+  valueA: number | null;
+  valueB: number | null;
+};
+
+type SeriesPoint = { year: string; value: number };
+
 export default function DashboardPage() {
   const router = useRouter();
 
@@ -42,7 +52,10 @@ export default function DashboardPage() {
 
   const [generated, setGenerated] = useState(false);
   const [selectedIndicator, setSelectedIndicator] = useState<string>("");
-  const [selectedCountry, setSelectedCountry] = useState<string>("Ireland");
+
+  const [selectedCountryA, setSelectedCountryA] = useState<string>("Ireland");
+  const [selectedCountryB, setSelectedCountryB] =
+    useState<string>("United Kingdom");
 
   const [rawData, setRawData] = useState<RawRow[] | null>(null);
   const [indicatorOptions, setIndicatorOptions] = useState<string[]>([]);
@@ -50,9 +63,10 @@ export default function DashboardPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [reportNotes, setReportNotes] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [copiedNotes, setCopiedNotes] = useState(false);
 
   const [aiInsight, setAiInsight] = useState("");
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
 
   const stats = [
     { label: "Birth-related indicators", icon: Activity },
@@ -107,7 +121,6 @@ export default function DashboardPage() {
 
         setIndicatorOptions(indicators);
 
-        // Set a default indicator if we don't have one yet
         if (!selectedIndicator && indicators.length > 0) {
           setSelectedIndicator(indicators[0]);
         }
@@ -121,7 +134,6 @@ export default function DashboardPage() {
     };
 
     loadData();
-    // we intentionally ignore selectedIndicator in deps so it only runs once
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -132,11 +144,16 @@ export default function DashboardPage() {
   const handleIndicatorChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const newIndicator = e.target.value;
     setSelectedIndicator(newIndicator);
-    setGenerated(false); // force user to regenerate to reflect change
+    setGenerated(false);
   };
 
-  const handleCountryChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    setSelectedCountry(e.target.value);
+  const handleCountryAChange = (e: ChangeEvent<HTMLSelectElement>) => {
+    setSelectedCountryA(e.target.value);
+    setGenerated(false);
+  };
+
+  const handleCountryBChange = (e: ChangeEvent<HTMLSelectElement>) => {
+    setSelectedCountryB(e.target.value);
     setGenerated(false);
   };
 
@@ -152,121 +169,249 @@ export default function DashboardPage() {
         ).sort()
       : [];
 
-  // If there are no matches yet (e.g. still loading), keep at least the current value
   const effectiveCountryOptions =
     countriesForSelectedIndicator.length > 0
       ? countriesForSelectedIndicator
-      : [selectedCountry];
+      : [selectedCountryA];
 
-  // Find the row matching the selected indicator + country
-  const matchingRow: RawRow | undefined =
-    generated && rawData && selectedIndicator && selectedCountry
+  // Find rows matching the selected indicator + both countries
+  const matchingRowA: RawRow | undefined =
+    generated && rawData && selectedIndicator && selectedCountryA
       ? rawData.find(
           (row) =>
             row["Series Name"] === selectedIndicator &&
-            row["Country Name"] === selectedCountry
+            row["Country Name"] === selectedCountryA
         )
       : undefined;
 
-  // Build chart data from the matching row
-  const chartData =
-    matchingRow && generated
+  const matchingRowB: RawRow | undefined =
+    generated && rawData && selectedIndicator && selectedCountryB
+      ? rawData.find(
+          (row) =>
+            row["Series Name"] === selectedIndicator &&
+            row["Country Name"] === selectedCountryB
+        )
+      : undefined;
+
+  // Build chart data containing both A and B
+  const chartData: ChartRow[] =
+    generated && (matchingRowA || matchingRowB)
       ? YEAR_COLUMNS.map((year) => {
-          const rawVal = matchingRow[year];
-          const num =
-            rawVal === undefined || rawVal === null || rawVal === ""
+          const rawA = matchingRowA?.[year];
+          const rawB = matchingRowB?.[year];
+
+          const numA =
+            rawA === undefined || rawA === null || rawA === ""
               ? NaN
-              : Number(rawVal);
-          return { year, value: num };
-        }).filter((d) => !Number.isNaN(d.value))
+              : Number(rawA);
+          const numB =
+            rawB === undefined || rawB === null || rawB === ""
+              ? NaN
+              : Number(rawB);
+
+          const valueA = Number.isNaN(numA) ? null : numA;
+          const valueB = Number.isNaN(numB) ? null : numB;
+
+          if (valueA === null && valueB === null) return null;
+
+          return { year, valueA, valueB };
+        }).filter((d): d is ChartRow => d !== null)
       : [];
 
+  const seriesA: SeriesPoint[] = chartData
+    .filter((d) => d.valueA !== null)
+    .map((d) => ({ year: d.year, value: d.valueA as number }));
+
+  const seriesB: SeriesPoint[] = chartData
+    .filter((d) => d.valueB !== null)
+    .map((d) => ({ year: d.year, value: d.valueB as number }));
+
   const generateReportNotes = () => {
-    const header = `Report notes for ${selectedIndicator || "the selected indicator"} in ${
-      selectedCountry
-    } (2000–2023)\n\n`;
-    const body =
-      generated && chartData.length > 0
-        ? [
-            `1. Describe the overall trend for ${selectedIndicator} in ${selectedCountry}.`,
-            `   • Is it increasing, decreasing, or relatively stable between 2000 and 2023?`,
-            `2. Comment on any obvious spikes or drops in the line.`,
-            `   • Could these be linked to policy changes, economic events, or health crises?`,
-            `3. Compare ${selectedCountry} to other countries or regions if you explore them on the dashboard.`,
-            `4. Explain what this means in practical terms (e.g. births, deaths, life expectancy or the meaning of this indicator).`,
-            `5. Briefly summarise why these findings are important for public health planning.`,
-          ].join("\n")
-        : [
-            `Graphs and data have not been generated yet or no data is available for this combination.`,
-            `1. First click "Generate graphs & data" on the dashboard.`,
-            `2. Make sure the selected indicator and country/region actually exist in the dataset.`,
-            `3. Once the graphs are visible, focus on direction of change, spikes/drops, and differences between regions.`,
-          ].join("\n");
+    const header =
+      `Report notes for ${selectedIndicator || "the selected indicator"} in ${
+        selectedCountryA
+      }` +
+      (selectedCountryB ? ` (compared with ${selectedCountryB})` : "") +
+      ` (2000–2023)\n\n`;
+
+    let body: string;
+
+    if (generated && chartData.length > 0) {
+      body = [
+        `1. Describe the overall trend for ${selectedIndicator} in ${selectedCountryA}.`,
+        `   • Is it increasing, decreasing, or relatively stable between 2000 and 2023?`,
+        selectedCountryB
+          ? `2. Compare ${selectedCountryA} with ${selectedCountryB}. Which one appears higher or lower overall?`
+          : `2. Optionally select a second country/region to compare trends.`,
+        `3. Comment on any obvious spikes or drops in the lines.`,
+        `   • Could these be linked to policy changes, economic events, or health crises?`,
+        `4. Explain what this means in practical terms for this indicator (e.g. births, deaths, life expectancy, or another health measure).`,
+        `5. Summarise why these findings are important for public health planning or policy-making.`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    } else {
+      body = [
+        `Graphs and data have not been generated yet or no data is available for this combination.`,
+        `1. First click "Generate graphs & data" on the dashboard.`,
+        `2. Make sure the selected indicator and country/region actually exist in the dataset.`,
+        `3. Once the graphs are visible, focus on direction of change, spikes/drops, and differences between regions.`,
+      ].join("\n");
+    }
 
     setReportNotes(header + body);
-    setCopied(false);
+    setCopiedNotes(false);
   };
 
   const handleCopyNotes = async () => {
     if (!reportNotes) return;
     try {
       await navigator.clipboard.writeText(reportNotes);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedNotes(true);
+      setTimeout(() => setCopiedNotes(false), 2000);
     } catch {
       // clipboard might not be available, fail silently
     }
   };
 
-  const generateAiInsight = () => {
-    if (!generated || chartData.length === 0) {
+  // Local AI-style summary (no external LLM)
+  const generateAiInsightLocal = () => {
+    if (!generated || chartData.length === 0 || seriesA.length === 0) {
       setAiInsight(
         [
           "Please generate graphs & data first.",
           "",
           '1. Click "Generate graphs & data" above.',
-          "2. Make sure a health indicator and country/region are selected.",
-          "3. Then try generating the AI-style summary again.",
+          "2. Make sure a health indicator and at least one country/region are selected.",
+          "3. Then try generating the local summary again.",
         ].join("\n")
       );
       return;
     }
 
-    const first = chartData[0].value;
-    const last = chartData[chartData.length - 1].value;
-    const diff = last - first;
+    const firstA = seriesA[0].value;
+    const lastA = seriesA[seriesA.length - 1].value;
+    const diffA = lastA - firstA;
 
-    let trend: string;
-    if (diff > 0.5) trend = "increasing";
-    else if (diff < -0.5) trend = "decreasing";
-    else trend = "relatively stable";
+    let trendA: string;
+    if (diffA > 0.5) trendA = "increasing";
+    else if (diffA < -0.5) trendA = "decreasing";
+    else trendA = "relatively stable";
+
+    let comparisonLine = "";
+    if (seriesB.length > 0 && selectedCountryB) {
+      const firstB = seriesB[0].value;
+      const lastB = seriesB[seriesB.length - 1].value;
+      const diffB = lastB - firstB;
+
+      let trendB: string;
+      if (diffB > 0.5) trendB = "increasing";
+      else if (diffB < -0.5) trendB = "decreasing";
+      else trendB = "relatively stable";
+
+      const gap = lastA - lastB;
+      const whichHigher =
+        Math.abs(gap) < 0.25
+          ? "very similar in the latest year"
+          : gap > 0
+          ? `${selectedCountryA} is higher than ${selectedCountryB} in the latest year`
+          : `${selectedCountryB} is higher than ${selectedCountryA} in the latest year`;
+
+      comparisonLine = [
+        "",
+        `For ${selectedCountryB}, the indicator also appears ${trendB}. In the most recent year, ${whichHigher}.`,
+      ].join("\n");
+    }
 
     const indicatorShort = selectedIndicator.toLowerCase();
 
     const lines = [
-      "AI-style summary (prototype, no external model):",
+      "Local AI-style summary (no external model):",
       "",
-      `For ${selectedIndicator} in ${selectedCountry}, the indicator appears to be ${trend} over the period 2000–2023.`,
-      `The value starts around ${first.toFixed(
+      `For ${selectedIndicator} in ${selectedCountryA}, the indicator appears to be ${trendA} over the period 2000–2023.`,
+      `The value starts around ${firstA.toFixed(
         1
-      )} and ends near ${last.toFixed(
+      )} and ends near ${lastA.toFixed(
         1
       )}, suggesting that ${indicatorShort} has ${
-        trend === "increasing"
+        trendA === "increasing"
           ? "been rising overall during this period."
-          : trend === "decreasing"
+          : trendA === "decreasing"
           ? "declined over time."
           : "remained fairly steady."
       }`,
+      comparisonLine,
       "",
       "In your report, you could:",
-      "• Comment on whether this pattern is expected for this country/region.",
+      "• Comment on whether these patterns are expected for each country/region.",
       "• Suggest possible reasons (policy changes, economic conditions, health system strength, crises).",
       "• Compare this pattern to other countries for the same indicator if data is available.",
       "• Link the numeric change back to real-world effects relevant to this indicator.",
     ];
 
     setAiInsight(lines.join("\n"));
+  };
+
+  // Build a high-quality prompt for ChatGPT (or any LLM) – no API key needed.
+  const generateLlmPromptForChatGPT = async () => {
+    if (!generated || chartData.length === 0 || seriesA.length === 0) {
+      setAiInsight(
+        [
+          "Please generate graphs & data first.",
+          "",
+          '1. Click "Generate graphs & data" above.',
+          "2. Make sure a health indicator and at least one country/region are selected.",
+          "3. Then try 'Copy LLM prompt for ChatGPT' again.",
+        ].join("\n")
+      );
+      return;
+    }
+
+    const seriesAString = seriesA
+      .map((p) => `${p.year}: ${p.value}`)
+      .join(", ");
+
+    const seriesBString =
+      seriesB.length > 0 && selectedCountryB
+        ? seriesB.map((p) => `${p.year}: ${p.value}`).join(", ")
+        : "";
+
+    const comparisonText =
+      seriesB.length > 0 && selectedCountryB
+        ? `\n\nFor ${selectedCountryB}, the indicator series is:\n${seriesBString}\n\nPlease compare ${selectedCountryA} and ${selectedCountryB} clearly.`
+        : "\n\nNo comparison country was provided; focus on a clear analysis for the primary country only.";
+
+    const prompt = [
+      "You are an expert public health data analyst.",
+      "You are given a world health indicator time series from 2000 to 2023, taken from a cleaned CSV dataset used in a student dashboard project.",
+      "",
+      `Indicator: ${selectedIndicator}`,
+      `Country/Region A: ${selectedCountryA}`,
+      `Time series for ${selectedCountryA}:`,
+      seriesAString,
+      comparisonText,
+      "",
+      "TASK:",
+      "Write a clear, accurate, student-friendly narrative (no more than about 3 short paragraphs) that:",
+      "1. Describes the overall trend over time (increasing/decreasing/stable) and any important spikes or drops.",
+      "2. Interprets what this might mean in real-world terms (e.g. births, deaths, life expectancy or the meaning of the indicator).",
+      "3. If a comparison country was provided, compares the two countries honestly and highlights key differences or similarities.",
+      "4. Avoids guessing specific causes unless they are very generic (e.g. 'policy changes', 'economic conditions', 'health system strength').",
+      "5. Avoids making up any numbers not present in the data – use only qualitative language about direction and relative levels.",
+      "",
+      "Keep the tone neutral and analytical, suitable for a college assignment.",
+    ].join("\n");
+
+    setAiInsight(prompt);
+
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopiedPrompt(true);
+      setTimeout(() => setCopiedPrompt(false), 2000);
+    } catch {
+      // Clipboard not available – the prompt is still shown in the textarea for manual copy.
+      setCopiedPrompt(false);
+    }
   };
 
   return (
@@ -326,7 +471,7 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Middle-left: indicator selection */}
+            {/* Indicator selection */}
             <div className="control-group" style={{ maxWidth: "260px" }}>
               <label>Health indicator</label>
               <select
@@ -341,17 +486,17 @@ export default function DashboardPage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                List built directly from the CSV (no need to maintain a separate
-                unique_series_names file in code).
+                List built directly from the CSV (no separate
+                unique_series_names file needed).
               </p>
             </div>
 
-            {/* Middle-right: country selection */}
+            {/* Country A selection */}
             <div className="control-group" style={{ maxWidth: "220px" }}>
-              <label>Country / region</label>
+              <label>Country / region A</label>
               <select
-                value={selectedCountry}
-                onChange={handleCountryChange}
+                value={selectedCountryA}
+                onChange={handleCountryAChange}
                 disabled={loadingData || !!loadError}
               >
                 {effectiveCountryOptions.map((country) => (
@@ -361,12 +506,34 @@ export default function DashboardPage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                Options filtered by the selected indicator.
+                Primary country/region for analysis.
               </p>
             </div>
 
-            {/* Right: generate & report */}
+            {/* Country B selection */}
             <div className="control-group" style={{ maxWidth: "220px" }}>
+              <label>Country / region B (comparison)</label>
+              <select
+                value={selectedCountryB}
+                onChange={handleCountryBChange}
+                disabled={loadingData || !!loadError}
+              >
+                <option value="">(None)</option>
+                {effectiveCountryOptions.map((country) => (
+                  <option key={country} value={country}>
+                    {country}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Optional comparison line on the same chart.
+              </p>
+            </div>
+          </div>
+
+          {/* Actions row */}
+          <div className="controls-row" style={{ marginTop: "16px" }}>
+            <div className="control-group" style={{ maxWidth: "260px" }}>
               <label>Actions</label>
               <button
                 type="button"
@@ -377,7 +544,7 @@ export default function DashboardPage() {
                   loadingData ||
                   !!loadError ||
                   !selectedIndicator ||
-                  !selectedCountry
+                  !selectedCountryA
                 }
               >
                 <PlayCircle className="h-4 w-4 mr-2" />
@@ -392,14 +559,12 @@ export default function DashboardPage() {
                 Download PDF summary
               </a>
               <p className="text-xs text-gray-500 mt-2">
-                1) Generate graphs &amp; data. 2) Use them as evidence in your
-                report. 3) Download the PDF template if needed.
+                1) Generate graphs. 2) Use them as evidence in your report. 3)
+                Download the PDF template if needed.
               </p>
             </div>
-          </div>
 
-          {/* Quick stat cards (placeholders) */}
-          <div className="controls-row" style={{ marginTop: "24px" }}>
+            {/* Quick stat cards (placeholders) */}
             {stats.map((stat) => (
               <div
                 key={stat.label}
@@ -439,14 +604,21 @@ export default function DashboardPage() {
                 <>
                   The chart below shows the real time trend for{" "}
                   <strong>{selectedIndicator}</strong> in{" "}
-                  <strong>{selectedCountry}</strong> using values from{" "}
-                  <strong>Data_Cleaned.csv</strong>.
+                  <strong>{selectedCountryA}</strong>
+                  {selectedCountryB ? (
+                    <>
+                      {" "}
+                      (solid line) compared with{" "}
+                      <strong>{selectedCountryB}</strong> (dashed line)
+                    </>
+                  ) : null}{" "}
+                  using values from <strong>Data_Cleaned.csv</strong>.
                 </>
               ) : (
                 <>
                   No data was found in the cleaned dataset for this combination
-                  of indicator and country. Try selecting a different country or
-                  indicator.
+                  of indicator and countries. Try selecting different
+                  combinations.
                 </>
               )
             ) : (
@@ -465,13 +637,29 @@ export default function DashboardPage() {
                   <XAxis dataKey="year" />
                   <YAxis />
                   <Tooltip />
+                  {/* Country A line */}
                   <Line
                     type="monotone"
-                    dataKey="value"
+                    dataKey="valueA"
+                    name={selectedCountryA}
                     stroke="#1b4965"
                     strokeWidth={2}
                     dot
+                    connectNulls
                   />
+                  {/* Country B line, if any */}
+                  {selectedCountryB && seriesB.length > 0 && (
+                    <Line
+                      type="monotone"
+                      dataKey="valueB"
+                      name={selectedCountryB}
+                      stroke="#e11d48"
+                      strokeWidth={2}
+                      dot={false}
+                      strokeDasharray="4 4"
+                      connectNulls
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
             ) : (
@@ -490,23 +678,27 @@ export default function DashboardPage() {
             <>
               <p className="text-sm text-gray-700">
                 Use this view to support your written report. For the selected
-                indicator and country/region, look for:
+                indicator and countries/regions, look for:
               </p>
               <ul className="list-disc list-inside text-sm text-gray-700 mt-2 space-y-1">
                 <li>
-                  Is the trend for <strong>{selectedIndicator}</strong>{" "}
+                  Is the trend for <strong>{selectedIndicator}</strong> in{" "}
+                  <strong>{selectedCountryA}</strong>{" "}
                   improving, worsening, or stable between 2000 and 2023?
                 </li>
+                {selectedCountryB && (
+                  <li>
+                    How does <strong>{selectedCountryA}</strong> compare with{" "}
+                    <strong>{selectedCountryB}</strong> – is one consistently
+                    higher/lower?
+                  </li>
+                )}
                 <li>
                   Are there any obvious spikes or drops that might indicate
                   policy changes, shocks, or data issues?
                 </li>
                 <li>
-                  How does {selectedCountry} compare to other countries when you
-                  change the selection?
-                </li>
-                <li>
-                  What story does this graph tell that you can write up in your
+                  What story do these graphs tell that you can write up in your
                   report?
                 </li>
               </ul>
@@ -541,9 +733,19 @@ export default function DashboardPage() {
                   type="button"
                   onClick={handleCopyNotes}
                   disabled={!reportNotes}
-                  className="px-3 py-1.5 rounded-md border text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3 py-1.5 rounded-md border text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
                 >
-                  {copied ? "Copied ✓" : "Copy notes"}
+                  {copiedNotes ? (
+                    <>
+                      <Check className="h-3 w-3" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      Copy notes
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -552,7 +754,7 @@ export default function DashboardPage() {
               value={reportNotes}
               onChange={(e) => {
                 setReportNotes(e.target.value);
-                setCopied(false);
+                setCopiedNotes(false);
               }}
               rows={8}
               className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-vertical"
@@ -565,34 +767,54 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          {/* AI-style insight block */}
+          {/* AI insight block */}
           <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-sm font-semibold flex items-center gap-2">
                 <Brain className="h-4 w-4 text-purple-600" />
-                AI-style insight (prototype)
+                AI insight
               </h3>
-              <button
-                type="button"
-                onClick={generateAiInsight}
-                className="px-3 py-1.5 rounded-md bg-purple-600 text-white text-xs font-medium hover:bg-purple-700 transition"
-              >
-                Generate AI summary
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={generateAiInsightLocal}
+                  className="px-3 py-1.5 rounded-md bg-slate-800 text-white text-xs font-medium hover:bg-slate-900 transition"
+                >
+                  Local summary
+                </button>
+                <button
+                  type="button"
+                  onClick={generateLlmPromptForChatGPT}
+                  className="px-3 py-1.5 rounded-md bg-purple-600 text-white text-xs font-medium hover:bg-purple-700 transition inline-flex items-center gap-1"
+                >
+                  {copiedPrompt ? (
+                    <>
+                      <Check className="h-3 w-3" />
+                      Prompt copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      Copy LLM prompt
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             <textarea
               value={aiInsight}
               readOnly
-              rows={7}
+              rows={8}
               className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-gray-100/70 focus:outline-none resize-vertical"
-              placeholder="Click 'Generate AI summary' to create a prototype narrative based on the selected indicator and country..."
+              placeholder="Click 'Local summary' for a built-in explanation, or 'Copy LLM prompt' to copy a ready-made prompt you can paste into ChatGPT and use in your report..."
             />
 
             <p className="text-[11px] text-gray-500">
-              This summary is generated locally using simple logic, not a real
-              LLM. Later you could replace this with a proper AI service to
-              generate richer explanations and predictions.
+              The local summary is generated with simple logic using your data.
+              The LLM prompt option does not call any API – it just prepares a
+              high-quality prompt using your real time series, so you can paste
+              it into ChatGPT (or any LLM) yourself without exposing an API key.
             </p>
           </div>
 
