@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, ChangeEvent } from "react";
+import { useState, useEffect, ChangeEvent } from "react";
 
 import {
   Globe2,
@@ -13,6 +13,8 @@ import {
   Brain,
 } from "lucide-react";
 
+import Papa from "papaparse";
+
 import {
   LineChart,
   Line,
@@ -23,78 +25,34 @@ import {
   CartesianGrid,
 } from "recharts";
 
-// Demo data structure – later we can replace this with real CSV/API data
-// Format: demoData[indicator][country] = [{ year, value }, ...]
-const demoData: Record<
-  string,
-  Record<string, { year: string; value: number }[]>
-> = {
-  "Crude birth rate (per 1,000 people)": {
-    Global: [
-      { year: "2018", value: 18.5 },
-      { year: "2019", value: 18.2 },
-      { year: "2020", value: 17.8 },
-      { year: "2021", value: 17.5 },
-      { year: "2022", value: 17.2 },
-      { year: "2023", value: 17.0 },
-    ],
-    Ireland: [
-      { year: "2018", value: 12.3 },
-      { year: "2019", value: 11.9 },
-      { year: "2020", value: 11.3 },
-      { year: "2021", value: 10.8 },
-      { year: "2022", value: 10.4 },
-      { year: "2023", value: 10.1 },
-    ],
-  },
-  "Crude death rate (per 1,000 people)": {
-    Global: [
-      { year: "2018", value: 7.6 },
-      { year: "2019", value: 7.5 },
-      { year: "2020", value: 8.1 },
-      { year: "2021", value: 8.0 },
-      { year: "2022", value: 7.8 },
-      { year: "2023", value: 7.7 },
-    ],
-    Ireland: [
-      { year: "2018", value: 6.4 },
-      { year: "2019", value: 6.3 },
-      { year: "2020", value: 7.0 },
-      { year: "2021", value: 6.8 },
-      { year: "2022", value: 6.6 },
-      { year: "2023", value: 6.5 },
-    ],
-  },
-  "Life expectancy at birth (years)": {
-    Global: [
-      { year: "2018", value: 72.6 },
-      { year: "2019", value: 72.8 },
-      { year: "2020", value: 72.1 },
-      { year: "2021", value: 72.3 },
-      { year: "2022", value: 72.6 },
-      { year: "2023", value: 72.9 },
-    ],
-    Ireland: [
-      { year: "2018", value: 82.2 },
-      { year: "2019", value: 82.4 },
-      { year: "2020", value: 81.9 },
-      { year: "2021", value: 82.0 },
-      { year: "2022", value: 82.3 },
-      { year: "2023", value: 82.5 },
-    ],
-  },
-};
+// Years in the dataset
+const YEAR_COLUMNS = Array.from(
+  { length: 2023 - 2000 + 1 },
+  (_, i) => (2000 + i).toString()
+);
 
-const indicatorOptions = Object.keys(demoData);
-const defaultIndicator = indicatorOptions[0];
-const defaultCountry = "Global";
+// We’ll focus on 3 key indicators from your dataset
+const INDICATOR_OPTIONS = [
+  "Birth rate, crude (per 1,000 people)",
+  "Death rate, crude (per 1,000 people)",
+  "Life expectancy at birth, total (years)",
+];
+
+const DEFAULT_INDICATOR = INDICATOR_OPTIONS[0]; // birth rate
+const DEFAULT_COUNTRY = "Ireland";
+
+type RawRow = Record<string, string>;
 
 export default function DashboardPage() {
   const [generated, setGenerated] = useState(false);
   const [selectedIndicator, setSelectedIndicator] =
-    useState<string>(defaultIndicator);
+    useState<string>(DEFAULT_INDICATOR);
   const [selectedCountry, setSelectedCountry] =
-    useState<string>(defaultCountry);
+    useState<string>(DEFAULT_COUNTRY);
+
+  const [rawData, setRawData] = useState<RawRow[] | null>(null);
+  const [loadingData, setLoadingData] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [reportNotes, setReportNotes] = useState("");
   const [copied, setCopied] = useState(false);
@@ -108,44 +66,110 @@ export default function DashboardPage() {
     { label: "Population health", icon: Users },
   ];
 
+  // Load the cleaned CSV once on mount
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setLoadingData(true);
+        setLoadError(null);
+
+        const res = await fetch("/data/Data_Cleaned.csv");
+        if (!res.ok) {
+          throw new Error(`Failed to load data: ${res.status} ${res.statusText}`);
+        }
+
+        const csvText = await res.text();
+
+        const parsed = Papa.parse<RawRow>(csvText, {
+          header: true,
+          skipEmptyLines: true,
+        });
+
+        const rows = (parsed.data || []).filter(
+          (row) => row["Series Name"] && row["Country Name"]
+        );
+
+        setRawData(rows);
+      } catch (err: any) {
+        setLoadError(
+          "Could not load health dataset. Check that Data_Cleaned.csv is in public/data/ and try again."
+        );
+      } finally {
+        setLoadingData(false);
+      }
+    };
+
+    loadData();
+  }, []);
+
   const handleGenerate = () => {
-    // later: fetch real data, call API, etc.
     setGenerated(true);
   };
 
   const handleIndicatorChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const newIndicator = e.target.value;
     setSelectedIndicator(newIndicator);
-
-    // If the current country isn't available for the new indicator, reset to Global
-    const countriesForIndicator = Object.keys(demoData[newIndicator] || {});
-    if (!countriesForIndicator.includes(selectedCountry)) {
-      setSelectedCountry(countriesForIndicator[0] || "Global");
-    }
+    // keep the same country; if it has no data for that indicator,
+    // the chart will just say no data
   };
 
   const handleCountryChange = (e: ChangeEvent<HTMLSelectElement>) => {
     setSelectedCountry(e.target.value);
   };
 
+  // Build list of countries for the selected indicator from the real data
+  const countriesForSelectedIndicator: string[] = rawData
+    ? Array.from(
+        new Set(
+          rawData
+            .filter((row) => row["Series Name"] === selectedIndicator)
+            .map((row) => row["Country Name"])
+        )
+      ).sort()
+    : [selectedCountry];
+
+  // Find the row matching the selected indicator + country
+  const matchingRow: RawRow | undefined =
+    generated && rawData
+      ? rawData.find(
+          (row) =>
+            row["Series Name"] === selectedIndicator &&
+            row["Country Name"] === selectedCountry
+        )
+      : undefined;
+
+  // Build chart data from the matching row
+  const chartData =
+    matchingRow && generated
+      ? YEAR_COLUMNS.map((year) => {
+          const rawVal = matchingRow[year];
+          const num =
+            rawVal === undefined || rawVal === null || rawVal === ""
+              ? NaN
+              : Number(rawVal);
+          return { year, value: num };
+        }).filter((d) => !Number.isNaN(d.value))
+      : [];
+
   const generateReportNotes = () => {
-    const header = `Report notes for ${selectedIndicator} in ${selectedCountry} (2000–2022)\n\n`;
-    const body = generated
-      ? [
-          `1. Describe the overall trend for ${selectedIndicator} in ${selectedCountry}.`,
-          `   • Is it increasing, decreasing, or relatively stable over the years shown?`,
-          `2. Comment on any obvious spikes or drops.`,
-          `   • Could these be linked to policy changes, economic events, or health crises?`,
-          `3. Compare ${selectedCountry} to the global pattern for this indicator (if relevant).`,
-          `4. Explain what this means for births, deaths, mortality, or life expectancy in practical terms.`,
-          `5. Briefly summarise why these findings are important for public health planning.`,
-        ].join("\n")
-      : [
-          `Graphs and data have not been generated yet.`,
-          `1. First click "Generate graphs & data" on the dashboard.`,
-          `2. Then, use the chart and summary values as evidence in your written report.`,
-          `3. Once the graphs are visible, focus on direction of change, spikes/drops, and differences between regions.`,
-        ].join("\n");
+    const header = `Report notes for ${selectedIndicator} in ${selectedCountry} (2000–2023)\n\n`;
+    const body =
+      generated && chartData.length > 0
+        ? [
+            `1. Describe the overall trend for ${selectedIndicator} in ${selectedCountry}.`,
+            `   • Is it increasing, decreasing, or relatively stable between 2000 and 2023?`,
+            `2. Comment on any obvious spikes or drops in the line.`,
+            `   • Could these be linked to policy changes, economic events, or health crises?`,
+            `3. Compare ${selectedCountry} to other countries or regions if you explore them on the dashboard.`,
+            `4. Explain what this means for births, deaths, or life expectancy in practical terms.`,
+            `5. Briefly summarise why these findings are important for public health planning.`,
+          ].join("\n")
+        : [
+            `Graphs and data have not been generated yet or no data is available for this combination.`,
+            `1. First click "Generate graphs & data" on the dashboard.`,
+            `2. Make sure the selected indicator and country/region actually exist in the dataset.`,
+            `3. Once the graphs are visible, focus on direction of change, spikes/drops, and differences between regions.`,
+          ].join("\n");
 
     setReportNotes(header + body);
     setCopied(false);
@@ -158,18 +182,9 @@ export default function DashboardPage() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ignore errors – clipboard might not be available
+      // clipboard might not be available, fail silently
     }
   };
-
-  const countriesForSelectedIndicator = Object.keys(
-    demoData[selectedIndicator] || {}
-  );
-
-  const chartData =
-    generated && demoData[selectedIndicator]?.[selectedCountry]
-      ? demoData[selectedIndicator][selectedCountry]
-      : [];
 
   const generateAiInsight = () => {
     if (!generated || chartData.length === 0) {
@@ -199,7 +214,7 @@ export default function DashboardPage() {
     const lines = [
       "AI-style summary (prototype, no external model):",
       "",
-      `For ${selectedIndicator} in ${selectedCountry}, the indicator appears to be ${trend} over the years shown.`,
+      `For ${selectedIndicator} in ${selectedCountry}, the indicator appears to be ${trend} over the period 2000–2023.`,
       `The value starts around ${first.toFixed(
         1
       )} and ends near ${last.toFixed(
@@ -215,7 +230,7 @@ export default function DashboardPage() {
       "In your report, you could:",
       "• Comment on whether this pattern is expected for this country/region.",
       "• Suggest possible reasons (policy changes, economic conditions, health system strength, crises).",
-      "• Compare this pattern to the global trend for the same indicator if data is available.",
+      "• Compare this pattern to other countries for the same indicator if data is available.",
       "• Link the numeric change back to real-world effects on births, deaths, or life expectancy.",
     ];
 
@@ -227,7 +242,7 @@ export default function DashboardPage() {
       {/* Themed header using your old style (now .health-header) */}
       <header className="health-header">
         <h1>Health Data Trends Dashboard</h1>
-        <p>Visualize global health indicators (2000–2022)</p>
+        <p>Visualize global health indicators (2000–2023)</p>
       </header>
 
       <main className="flex-1 w-full">
@@ -241,14 +256,21 @@ export default function DashboardPage() {
                 Explore{" "}
                 <strong>births, deaths, mortality, life expectancy</strong> and
                 other key world health indicators across more than 200
-                countries. This prototype uses sample values but mirrors how the
-                real dashboard will behave once connected to your cleaned CSV
-                data.
+                countries. The graphs below now use values from your cleaned data
+                file <strong>Data_Cleaned.csv</strong>.
               </p>
               <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
                 <Globe2 className="h-4 w-4 text-blue-600" />
-                108 indicators • 200+ countries • Years: 2000–2022
+                108 indicators • 200+ countries • Years: 2000–2023
               </p>
+              {loadingData && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Loading dataset… please wait.
+                </p>
+              )}
+              {loadError && (
+                <p className="text-xs text-red-600 mt-1">{loadError}</p>
+              )}
             </div>
 
             {/* Middle-left: indicator selection */}
@@ -257,22 +279,27 @@ export default function DashboardPage() {
               <select
                 value={selectedIndicator}
                 onChange={handleIndicatorChange}
+                disabled={loadingData || !!loadError}
               >
-                {indicatorOptions.map((indicator) => (
+                {INDICATOR_OPTIONS.map((indicator) => (
                   <option key={indicator} value={indicator}>
                     {indicator}
                   </option>
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                Choose whether to focus on births, deaths, or life expectancy.
+                Currently focused on births, deaths, and total life expectancy.
               </p>
             </div>
 
             {/* Middle-right: country selection */}
-            <div className="control-group" style={{ maxWidth: "200px" }}>
+            <div className="control-group" style={{ maxWidth: "220px" }}>
               <label>Country / region</label>
-              <select value={selectedCountry} onChange={handleCountryChange}>
+              <select
+                defaultValue={selectedCountry}
+                onChange={handleCountryChange}
+                disabled={loadingData || !!loadError}
+              >
                 {countriesForSelectedIndicator.map((country) => (
                   <option key={country} value={country}>
                     {country}
@@ -280,7 +307,7 @@ export default function DashboardPage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                Prototype options: Global and Ireland.
+                Dataset contains over 200 countries. Default is Ireland.
               </p>
             </div>
 
@@ -291,7 +318,7 @@ export default function DashboardPage() {
                 type="button"
                 onClick={handleGenerate}
                 className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition disabled:opacity-60 disabled:cursor-not-allowed mb-2"
-                disabled={generated}
+                disabled={generated || loadingData || !!loadError}
               >
                 <PlayCircle className="h-4 w-4 mr-2" />
                 {generated ? "Graphs generated" : "Generate graphs & data"}
@@ -332,8 +359,8 @@ export default function DashboardPage() {
                 </div>
                 <p className="text-[11px] text-gray-500 mt-1">
                   {generated
-                    ? "Sample values computed. Replace with real metrics later."
-                    : "Placeholder – will show summary values after generation."}
+                    ? "Values are based on your real dataset. Replace text with your own summary."
+                    : "Placeholder – will show as 'ready' after generation."}
                 </p>
               </div>
             ))}
@@ -344,23 +371,28 @@ export default function DashboardPage() {
         <section id="chartContainer">
           <h2 className="text-xl font-semibold mb-1">
             {selectedIndicator}{" "}
-            {generated ? "(generated view)" : "(waiting for generation)"}
+            {generated ? "(generated from cleaned data)" : "(waiting for generation)"}
           </h2>
           <p className="text-sm text-gray-600 mb-4">
             {generated ? (
-              <>
-                The chart below shows a sample time trend for{" "}
-                <strong>{selectedIndicator}</strong> in{" "}
-                <strong>{selectedCountry}</strong>. When connected to real
-                data, this will reflect actual values from your cleaned world
-                health dataset.
-              </>
+              chartData.length > 0 ? (
+                <>
+                  The chart below shows the real time trend for{" "}
+                  <strong>{selectedIndicator}</strong> in{" "}
+                  <strong>{selectedCountry}</strong> using values from{" "}
+                  <strong>Data_Cleaned.csv</strong>.
+                </>
+              ) : (
+                <>
+                  No data was found in the cleaned dataset for this combination
+                  of indicator and country. Try selecting a different country or
+                  indicator.
+                </>
+              )
             ) : (
               <>
                 Click <strong>&quot;Generate graphs &amp; data&quot;</strong>{" "}
-                above to populate this chart. Right now you&apos;re seeing a
-                placeholder configuration for {selectedIndicator} in{" "}
-                <strong>{selectedCountry}</strong>.
+                above to populate this chart using your cleaned dataset.
               </>
             )}
           </p>
@@ -394,7 +426,7 @@ export default function DashboardPage() {
         {/* Summary / explanation area using #summary + .data-info + report notes + AI insight */}
         <section id="summary">
           <h2>Summary & Interpretation</h2>
-          {generated ? (
+          {generated && chartData.length > 0 ? (
             <>
               <p className="text-sm text-gray-700">
                 Use this view to support your written report. For the selected
@@ -403,15 +435,15 @@ export default function DashboardPage() {
               <ul className="list-disc list-inside text-sm text-gray-700 mt-2 space-y-1">
                 <li>
                   Is the trend for <strong>{selectedIndicator}</strong>{" "}
-                  improving, worsening, or stable over time?
+                  improving, worsening, or stable between 2000 and 2023?
                 </li>
                 <li>
                   Are there any obvious spikes or drops that might indicate
                   policy changes, shocks, or data issues?
                 </li>
                 <li>
-                  How does {selectedCountry} compare to the global pattern for
-                  this indicator?
+                  How does {selectedCountry} compare to other countries when you
+                  change the selection?
                 </li>
                 <li>
                   What story about births, deaths, or life expectancy does this
@@ -505,7 +537,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="data-info">
-            <p>📊 108 Indicators • 200+ Countries • Years: 2000–2022</p>
+            <p>📊 108 Indicators • 200+ Countries • Years: 2000–2023</p>
           </div>
         </section>
       </main>
