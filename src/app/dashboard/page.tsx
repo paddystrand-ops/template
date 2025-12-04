@@ -25,13 +25,13 @@ import {
   CartesianGrid,
 } from "recharts";
 
-// Years in the dataset
+// Years we care about (2000–2023)
 const YEAR_COLUMNS = Array.from(
   { length: 2023 - 2000 + 1 },
   (_, i) => (2000 + i).toString()
 );
 
-// We’ll focus on 3 key indicators from your dataset
+// Focus on 3 key indicators from the dataset
 const INDICATOR_OPTIONS = [
   "Birth rate, crude (per 1,000 people)",
   "Death rate, crude (per 1,000 people)",
@@ -90,9 +90,9 @@ export default function DashboardPage() {
         );
 
         setRawData(rows);
-      } catch (err: any) {
+      } catch (err) {
         setLoadError(
-          "Could not load health dataset. Check that Data_Cleaned.csv is in public/data/ and try again."
+          "Could not load health dataset. Check that public/data/Data_Cleaned.csv exists and try again."
         );
       } finally {
         setLoadingData(false);
@@ -109,8 +109,6 @@ export default function DashboardPage() {
   const handleIndicatorChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const newIndicator = e.target.value;
     setSelectedIndicator(newIndicator);
-    // keep the same country; if it has no data for that indicator,
-    // the chart will just say no data
   };
 
   const handleCountryChange = (e: ChangeEvent<HTMLSelectElement>) => {
@@ -126,7 +124,13 @@ export default function DashboardPage() {
             .map((row) => row["Country Name"])
         )
       ).sort()
-    : [selectedCountry];
+    : [];
+
+  // If there are no matches yet (e.g. still loading), keep at least the current value
+  const effectiveCountryOptions =
+    countriesForSelectedIndicator.length > 0
+      ? countriesForSelectedIndicator
+      : [selectedCountry];
 
   // Find the row matching the selected indicator + country
   const matchingRow: RawRow | undefined =
@@ -234,7 +238,7 @@ export default function DashboardPage() {
       "• Link the numeric change back to real-world effects on births, deaths, or life expectancy.",
     ];
 
-    setAiInsight(lines.join("\n"));
+  setAiInsight(lines.join("\n"));
   };
 
   return (
@@ -296,11 +300,11 @@ export default function DashboardPage() {
             <div className="control-group" style={{ maxWidth: "220px" }}>
               <label>Country / region</label>
               <select
-                defaultValue={selectedCountry}
+                value={selectedCountry}
                 onChange={handleCountryChange}
                 disabled={loadingData || !!loadError}
               >
-                {countriesForSelectedIndicator.map((country) => (
+                {effectiveCountryOptions.map((country) => (
                   <option key={country} value={country}>
                     {country}
                   </option>
